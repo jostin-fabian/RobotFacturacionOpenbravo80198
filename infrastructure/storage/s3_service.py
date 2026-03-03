@@ -11,6 +11,7 @@ Ejemplo real:
   FacturasOpenBravo/QA/27-01-2026/B50FCC4DEEDE775750F2EF7839938234_27-01-2026.pdf
 """
 from __future__ import annotations
+from datetime import datetime
 
 import hashlib
 from logger import get_logger
@@ -48,7 +49,8 @@ class AWSS3StorageService:
         Ejemplo:
           FacturasOpenBravo/QA/27-01-2026/B50FCC4D..._27-01-2026.pdf
         """
-        formatted_date = date.strftime("%d-%m-%Y")
+        #formatted_date = date.strftime("%d-%m-%Y")
+        formatted_date = datetime.now().strftime("%d-%m-%Y") # Guardamos la fecha en la que el robot esta subiendo la factura a s3 , ya que la fecha de la factura nos da igual ya que la tenemos en bd y en la propia factura , asi sabemos cada dia que facutras ha subdio el robot a s3
         return (
             f"FacturasOpenBravo/{self._env}"
             f"/{formatted_date}"
