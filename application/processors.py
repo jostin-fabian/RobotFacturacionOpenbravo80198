@@ -14,6 +14,7 @@ from logger import get_logger
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from pathlib import Path
+from infrastructure.bigcommerce.bigcommerce_service import BigCommerceService
 
 from domain.models import InvoiceRecord, ProcessingResult
 from interfaces.protocols import (
@@ -32,17 +33,20 @@ class DocumentProcessor(ABC):
     """
 
     def __init__(
-        self,
-        automation: IAutomationEngine,
-        storage: IStorageService,
-        file_manager: IFileManager,
+            self,
+            automation: IAutomationEngine,
+            storage: IStorageService,
+            file_manager: IFileManager,
+            bc_service: BigCommerceService,
     ) -> None:
         self._automation = automation
-        self._storage    = storage
-        self._fm         = file_manager
+        self._storage = storage
+        self._fm = file_manager
+        self._bc = bc_service
 
     @abstractmethod
-    def can_handle(self, invoice: InvoiceRecord) -> bool: ...
+    def can_handle(self, invoice: InvoiceRecord) -> bool:
+        ...
 
     async def process(self, invoice: InvoiceRecord) -> ProcessingResult:
         s3_key = self._storage.build_s3_key(invoice.invoice_id, invoice.date_invoiced)
@@ -65,11 +69,38 @@ class DocumentProcessor(ABC):
             # Eficiencia de memoria: borrar inmediatamente tras subida
             self._fm.delete(dest)
 
+        # Tras confirmar el PDF en S3, actualizar BC
+        self._update_bc_metafield(invoice, url)
+
         return ProcessingResult(
             invoice_id=invoice.invoice_id,
             document_no=invoice.document_no,
             success=True, s3_url=url,
         )
+
+    def _update_bc_metafield(self, invoice: InvoiceRecord, s3_url: str) -> None:
+        """
+        Error no fatal: el PDF ya está en S3.
+        En el próximo run el skip también reintenta el metafield.
+        """
+        if not invoice.order_document_no:
+            logger.debug(
+                "[processors] '%s' sin order_document_no. No se actualiza metafield BC.",
+                invoice.document_no,
+            )
+            return
+        try:
+            self._bc.update_order_invoice_metafield(
+                order_document_no=invoice.order_document_no,
+                invoice_url=s3_url,
+                doc_type=invoice.doc_type,
+                invoice_date=invoice.date_invoiced,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "[processors] Error actualizando metafield BC para '%s' (pedido '%s'): %s",
+                invoice.document_no, invoice.order_document_no, exc,
+            )
 
 
 # ── Tipos concretos (OCP) ─────────────────────────────────────────────────────

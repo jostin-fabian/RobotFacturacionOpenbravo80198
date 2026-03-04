@@ -14,6 +14,8 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone
 
+from infrastructure.bigcommerce.bigcommerce_service import BigCommerceService
+from infrastructure.persistence.s3_profile_repository import S3ProfileRepository
 from infrastructure.data.postgres_repository import PostgresWatermarkRepository
 from infrastructure.automation.hwm_service import HardwareManagerService
 from infrastructure.automation.playwright_engine import PlaywrightAutomationEngine
@@ -30,7 +32,6 @@ from application.processors import (
     # DeliveryNoteProcessor,  ← descomentar al añadir Albaranes
 )
 from application.orchestrator import RobotOrchestrator
-
 
 # ── Entornos válidos ──────────────────────────────────────────────────────────
 # Las rutas S3 dependen de este valor de forma case-sensitive:
@@ -78,8 +79,8 @@ def build() -> tuple[RobotOrchestrator, datetime]:
     # ── Credenciales AWS compartidas ──────────────────────────────────────
     aws_access_key = _env("AWS_ACCESS_KEY_ID")
     aws_secret_key = _env("AWS_SECRET_ACCESS_KEY")
-    aws_region     = _env("AWS_REGION", "eu-south-2")
-    aws_bucket     = _env("AWS_BUCKET", "ecommerce-quadis")
+    aws_region = _env("AWS_REGION", "eu-south-2")
+    aws_bucket = _env("AWS_BUCKET", "ecommerce-quadis")
 
     # ── Storage de PDFs ───────────────────────────────────────────────────
     # Rutas generadas:
@@ -97,14 +98,25 @@ def build() -> tuple[RobotOrchestrator, datetime]:
     #   Sessions/ob_session_development.json
     #   Sessions/ob_session_qa.json
     #   Sessions/ob_session_production.json
-    session_repo = S3SessionRepository(
+    # session_repo = S3SessionRepository(
+    #     bucket=aws_bucket,
+    #     key=f"Sessions/ob_session_{environment.lower()}.json",
+    #     region=aws_region,
+    #     access_key=aws_access_key,
+    #     secret_key=aws_secret_key,
+    # )
+
+    # Perfil de Chromium segmentado por entorno:
+    #   ChromiumProfiles/ob_profile_development.tar.gz
+    #   ChromiumProfiles/ob_profile_qa.tar.gz
+    #   ChromiumProfiles/ob_profile_production.tar.gz
+    profile_repo = S3ProfileRepository(
         bucket=aws_bucket,
-        key=f"Sessions/ob_session_{environment.lower()}.json",
+        key=f"ChromiumProfiles/ob_profile_{environment.lower()}.tar.gz",
         region=aws_region,
         access_key=aws_access_key,
         secret_key=aws_secret_key,
     )
-
     # ── Hardware Manager (HWM) ──────────────────────────────────────────────
     # Arranca el proceso Java OpenBravo HWM (localhost:8090) ANTES del navegador.
     # Sin HWM el POS muestra "Printer and display are not available" → sin PDF.
@@ -124,7 +136,8 @@ def build() -> tuple[RobotOrchestrator, datetime]:
         pos_username=_env("OB_POS_USERNAME", "RobotEscapa"),
         pos_password=_env("OB_POS_PASSWORD"),
         file_manager=file_manager,
-        session_repo=session_repo,
+        profile_repo=profile_repo,  # ← sincroniza perfil con S3 en start/close
+        # session_repo=session_repo,
         hwm_service=hwm,
         headless=_env("HEADLESS", "true").lower() != "false",
     )
@@ -151,9 +164,14 @@ def build() -> tuple[RobotOrchestrator, datetime]:
         cod_usuario=_env("QASSANDRA_COD_USUARIO"),
         bearer_token=_env("QASSANDRA_BEARER_TOKEN"),
     )
-
+    # BIG ECOMMERCE
+    bc_service = BigCommerceService(
+        store_hash=_env("BC_STORE_HASH", "dmbqnj0lgo"),
+        access_token=_env("BC_ACCESS_TOKEN"),
+        # metafield_key por defecto "facturas", sobreescribible con BC_METAFIELD_KEY
+    )
     # ── Procesadores de documentos (OCP) ──────────────────────────────────
-    processor_args = (automation, storage, file_manager)
+    processor_args = (automation, storage, file_manager, bc_service)
     factory = DocumentProcessorFactory([
         InvoiceProcessor(*processor_args),
         CreditMemoProcessor(*processor_args),
